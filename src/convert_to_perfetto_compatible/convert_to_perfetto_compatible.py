@@ -1,9 +1,6 @@
 import gzip
-import re
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 import orjson
 import typer
@@ -31,12 +28,24 @@ def _process_events(events):
     print(f"process_events start {len(events)=}")
 
     last_end_time_of_pid_tid = defaultdict(lambda: -1)
+    moved_tid_by_slice = {}
 
     for e in events:
         if e["ph"] == "X" and _is_interest_event(e):
+            original_tid = e["tid"]
             while e["ts"] < last_end_time_of_pid_tid[(e["pid"], e["tid"])]:
-                e["tid"] = str(e["tid"]) + "_hack"
+                e["tid"] = str(e["tid"]) + "_pdl"
+            if e["tid"] != original_tid:
+                moved_tid_by_slice[(e["pid"], original_tid, e["ts"])] = e["tid"]
             last_end_time_of_pid_tid[(e["pid"], e["tid"])] = e["ts"] + e["dur"]
+
+    # Flow end events identify their target slice by pid, tid, and timestamp.
+    # Move them with the slice so Perfetto keeps the CUDA launch arrows intact.
+    for e in events:
+        if e["ph"] == "f":
+            slice_key = (e["pid"], e["tid"], e["ts"])
+            if slice_key in moved_tid_by_slice:
+                e["tid"] = moved_tid_by_slice[slice_key]
 
     return events
 
